@@ -1,0 +1,215 @@
+---
+title: "SVM using (random generated) Luminex Data"
+author: "Eric Olle"
+date: "2/21/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+The goal of this document is to provide a basic structure to use Support Vector Machine algorithms to luminex multi-plex data.  This r markdown document is designed to be scalable and the only requirement is the data is clean and has a category column for training.  The data is then divided into training and testing.  Once the SVM is trained it can be applied to the testing data set to obtain basic performance statistics and the confusion matrix.  If the standard SVMlinear kernel is acceptable, the trained model can be saved and used to predict new samples.
+
+Document summary: 
+
+Basic SVM Modeling in R for use with Luminex data
+Written by:  Eric W. Olle
+For use with Luminex generated data
+CC-BY-SA-NC license 
+Mo warranty provided.
+Created: Febuary 2022
+Edited: Aug. 14, 2022
+
+## Loading Packages
+
+The following document is meant to be a basic overview of how to use SVM to categorize two or more different groups (i.e. Normal v  disease) or different sub-types of similar disease based upon a standard Luminex 10-plex panel This can be applied to larger size panels and different data sets.  This is just meant to be an very basic "off the shelf" solution for a standard problem.  There are several excellent online resources such as Data Camp as well as some excellent books dedicated to machine learning.  The basic references used for this were were: Recognition in Machine Learning by Christopher M. Bishop (2006) and Mastering Machine Learning with R by Cory Lesmeister along with the R package manuals.
+
+```{r loading packages}
+library(tidyverse)  #Easiest best is to do them individually
+library(kernlab) # Required for easier repeats and confusion matrix
+library(caret)  # This package makes data set splitting easier
+```
+
+## Loading data
+
+In this part the data is loaded from a: csv, excel or RDS file For the purpose of teaching a "manufactured" data set was created to be similar to a standard human 10-plex assay.  The data is not meant to be realistic and is used for teaching purposes only.  This generated data has two categories of samples:  Control and an "made up" auto immune disease (AID).
+
+In general there are three steps.  First, the data is loaded from an appropriate format.  Second, any values that are not appropriate (i.e. a negative number for cytokines concentration) are replaced by an NA.  Third, a clean data set is created by removing any rows with NA values which can skew the results. Once clean the data set can be visualized and then divided into training and testing sub-groups for Support Vector Machine Analysis.
+
+This section will verify the data set loaded with checking the first 6 records.  If you notice there are two records with negative values and this data needs to be cleaned using the tidyverse::dplyr package.
+
+``` {r loading dataset}
+
+#NOTE:  The file type can also be excel or csv just requires a different read conmand.
+
+dataset_raw <- readRDS(file = "ml_dataset_raw")
+
+# The following is for other types of files.  Will need to un comment and correctly configure.
+#-----------------------------------------------------------------------------#
+# For CSV In rstudio use the import data set verify and copy the command.
+
+# data set_raw <- read.csv(<file>, header = TRUE, sep = ",", quote = "\"", dec = ".")
+
+# For excel files (xls and xlsx)
+#library(readxl)
+#read_excel(<path>) 
+#-----------------------------------------------------------------------------#
+
+head(dataset_raw)
+
+```
+
+
+The above data shows that the data contains some negative numbers and that the category column is not a factor.  These will be corrected in the following sections.  Please note that the column names use and underscore instead of a dash and have had any special characters (i.e. gamma) removed.  This just makes future referencing easier.  To see negative numbers check in the TNF-a column.
+
+```{r cleaning the data set}
+
+dataset_raw <- dataset_raw %>%
+    replace(., dataset_raw  < 0, NA)
+
+# Looking at the number of rows in the data set prior to NA removal
+
+                                        # filtering out NA
+
+
+svm_dataset <- dataset_raw %>%
+    na.exclude()
+
+# Looking at percent remaining
+
+head(svm_dataset)
+
+
+
+```
+
+
+
+The above data set has had the negative numbers converted to NA's.  This can be any value that is not appropriate for analysis.  The data set then is converted to the SVM data set for training and testing by removing the NA's that may affect the algorithm.  The SVM data set has `r (nrow(svm_dataset)/nrow(dataset_raw))*100`% of the raw data set.
+
+Concluding for data set cleaning.  A clean data set is required to train any machine learning or AI model.  However, be careful on "over cleaning" the to fit potential conditional biases.  Do just enough to clean the set such as removing missing values and with VERY large data sets consider removing outliers.  Be very careful on using outlier removal if the data set does not have appropriate normal distribution.
+
+Once the data is cleaned/"tidy data" one column need to be converted to a factor.  In this example there are two categories: control and AID (Auto Immune Disease).  Remember this is "fake" data so these can be any name.
+
+``` {r converting category columne to factor}
+
+svm_dataset$category <- as.factor(svm_dataset$category)
+
+head(svm_dataset)
+
+```
+
+The next step is to perform a basic visual inspection of the data.  This is using a box plot to show overall distribution and outliers.  Remember this is a data set generated using the random normal variable so there may appear to be "outliers" but this is just part of the model.  
+
+``` {r visualizing the svm dataset after cleaning, fig.show='asis'}
+# Need to gather the data from column format to a long format for use
+# with ggplot.  This is why the gather() is used with the SVM data
+# set.
+   
+ggplot(gather(svm_dataset,
+               key = "Analyte" ,
+               value = "Concentration",
+              1:10), aes(x = factor(Analyte),
+                         y = Concentration,
+                         fill = category)) +
+    geom_boxplot() +
+    labs(title = "Box Plot of Standard 10-plex",
+         subtitle = "Data set = Random Generated.",
+         fill = "Category") +
+    xlab("Cytokine") +
+    ylab("Concentration")
+```
+
+## Creating the SVM model
+
+First divide into training and testing data.  THIS IS ABSOLUTELY REQUIRED.  Using the same data to train and test can lead to over-fitting and/or over estimating the models fit. 
+
+
+``` {r partitioning the data set into training and testing }
+
+# NOTE: using the caret package to make this easier.
+# NOTE:  p value can be changed between 0.6 and 0.8 at user discretion.
+
+training <- caret::createDataPartition(y = svm_dataset$category,
+                                       p = 0.70,
+                                       list = FALSE)
+
+
+
+svm_training <- svm_dataset[ training,]
+svm_testing  <- svm_dataset[-training,]
+
+
+```
+
+
+Next step is to do a very basic SVM model with a linear kernel This is using KernLab and allows for easier repeats using training control.  
+
+``` {r training the svm model using kernlab}
+
+trnctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+svm  <- train(category ~., data = svm_training, method = "svmLinear",
+                    trControl = trnctrl,
+                    preProcess =  c("center", "scale"),
+                    tuneLength = 10)
+print(svm)
+
+```
+
+The above shows how the SVM was trained.  The next step is to test it against the testing partition.
+
+``` {r looking at the svm performance agains the testing data}
+
+svm_pred <- predict(svm , svm_testing)
+
+## Other plus of using kernlab is the easier confusion matrix generation
+
+confusionMatrix(table(svm_pred, svm_testing$category))
+```
+
+The confusion matrix and the statistics shows how the model performs.  This was a simple model but in more complex models, missed calls are common and will be show in the confusion matrix and SVM statistics.
+
+## Using the SVM model to predict the category
+
+In real world scenarios, the SVM model would be saved, and this next section would be a separate r markdown document (or r script) that would be used just for prediction. For ease of teaching the predicting was show as part of the same r markdown file.
+
+Using a  new data set created  with another random generation seed. This data set has the same underlying distributions of the original data but was created separately.  This set kept the category but will be "blinded" and then tested.  The data was cleaned prior to saving to make this section easier.
+
+```{r loadiing, predicting and viewing the new data}
+#loading the data set
+new_data <- readRDS("ml_predict_set")
+#blinding the data 
+blind_new_data <- select(new_data, -category)
+#predicting the category
+new_data_predict <- predict(svm,  blind_new_data)
+
+# column binding the new data predictions 
+
+full_new_data <- cbind(blind_new_data, Prediction = new_data_predict)
+
+## Looking at the full table
+
+knitr::kable(full_new_data, digits = 2)
+
+```
+
+The above table shows the prediction attached to the data.  The data was blinded and if one wants they can do a repeat confusion matrix comparing the new_data and the full_new data.
+
+Finally, the full new data set with predictions can be plotted as above.
+
+```{r plotting the predicted data, fig.show='asis'}
+## Visualizing the predicted new data
+
+ggplot(gather(full_new_data,
+               key = "Analyte" ,
+               value = "Concentration",
+              1:10), aes(x = factor(Analyte),
+                         y = Concentration,
+                         fill = Prediction)) +
+    geom_boxplot() +
+    labs(title = "Box Plot of Standard 10-plex After Classification",
+         subtitle = "Data set = Random Generated.",
+         fill = "Prediction") +
+    xlab("Cytokine") +
+    ylab("Concentration")
+
+```
